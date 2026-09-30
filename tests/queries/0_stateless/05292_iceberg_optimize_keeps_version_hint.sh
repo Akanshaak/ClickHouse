@@ -26,15 +26,31 @@ ${CLICKHOUSE_CLIENT} --allow_insert_into_iceberg=1 --mutations_sync=2 --query \
 
 echo "before: $(${CLICKHOUSE_CLIENT} --query "SELECT arraySort(groupArray(id)) FROM ${TABLE}")"
 
-# OPTIMIZE's outcome (success, no-op, or cloud/fail-closed exception) is not asserted, so its stderr is discarded.
+VERSION_HINT="${TABLE_PATH}metadata/version-hint.text"
+if [[ ! -f "${VERSION_HINT}" ]]; then
+    echo "version-hint.text missing before OPTIMIZE"
+    exit 1
+fi
+hint_before=$(<"${VERSION_HINT}")
+
+# Require `OPTIMIZE` to succeed; readability alone also holds when compaction fails before committing.
 ${CLICKHOUSE_CLIENT} --allow_experimental_iceberg_compaction=1 --query \
-    "OPTIMIZE TABLE ${TABLE}" >/dev/null 2>&1
+    "OPTIMIZE TABLE ${TABLE}" >/dev/null || exit 1
 
 # The buggy build deletes the pointer here.
-if [[ -f "${TABLE_PATH}metadata/version-hint.text" ]]; then
+if [[ -f "${VERSION_HINT}" ]]; then
     echo "version-hint.text present"
+    hint_after=$(<"${VERSION_HINT}")
 else
     echo "version-hint.text deleted"
+    hint_after=""
+fi
+
+# A successful no-op must not pass: the compacted metadata version has to be published.
+if [[ "${hint_before}" =~ ^[0-9]+$ && "${hint_after}" =~ ^[0-9]+$ ]] && (( 10#${hint_after} > 10#${hint_before} )); then
+    echo "metadata version advanced"
+else
+    echo "metadata version did not advance"
 fi
 
 # Load-bearing assertion: the table stays readable through the hint (buggy build throws FILE_DOESNT_EXIST, captured so only the reference mismatch fails the test).

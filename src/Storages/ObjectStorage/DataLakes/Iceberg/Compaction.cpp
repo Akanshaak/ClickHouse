@@ -206,7 +206,9 @@ static Plan getPlan(
         context,
         log.get(),
         persistent_table_components.table_uuid,
-        persistent_table_components.metadata_compression_method);
+        persistent_table_components.metadata_compression_method,
+        /* force_fetch_latest_metadata */ true,
+        /* ignore_metadata_pointer_overrides */ true);
     plan.generator.setVersion(metadata_version + 1);
 
     Poco::JSON::Object::Ptr initial_metadata_object
@@ -1337,6 +1339,7 @@ static void writeMetadataFiles(
         std::string json_representation = stringifyJSON(metadata_object, 4);
 
         auto hint_path = plan.generator.generateVersionHint();
+        bool version_hint_confirmed = false;
         if (!writeMetadataFileAndVersionHint(
                 path_resolver,
                 generated_metadata_info,
@@ -1344,8 +1347,14 @@ static void writeMetadataFiles(
                 hint_path,
                 object_storage,
                 context,
-                /* try_write_version_hint */ true))
+                /* try_write_version_hint */ true,
+                &version_hint_confirmed))
             throw Exception(ErrorCodes::FILE_ALREADY_EXISTS, "Metadata file {} already exists", generated_metadata_info.path.serialize());
+        if (!version_hint_confirmed)
+            throw Exception(
+                ErrorCodes::LOGICAL_ERROR,
+                "Metadata file {} was written but version-hint.text was not confirmed; old files were not removed",
+                generated_metadata_info.path.serialize());
     }
 }
 
